@@ -1,0 +1,93 @@
+version: '3.7'
+
+services:
+  traefik:
+    image: "traefik:v2.6"
+    command:
+      - "--log.level=WARN"
+      - "--accesslog=true"
+      - "--api.dashboard=true"
+      - "--ping=true"
+      - "--ping.entrypoint=ping"
+      - "--entryPoints.ping.address=:8082"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.websecure.address=:443"
+      - "--certificatesresolvers.myresolver.acme.tlschallenge=true"
+      - "--certificatesresolvers.myresolver.acme.email=user@mail.com"
+      - "--certificatesresolvers.myresolver.acme.storage=/letsencrypt/acme.json"
+      - "--certificatesResolvers.myresolver.acme.httpChallenge=true"
+      - "--certificatesResolvers.myresolver.acme.httpChallenge.entryPoint=web"
+      # redirect port 80 -> 443
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.web.http.redirections.entryPoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entryPoint.scheme=https"
+      - "--entrypoints.web.http.redirections.entrypoint.permanent=true"
+      # crear token pilot traefik
+      #- "--pilot.token=b9ed87cf-17f9-44e4-baee-b6cc9704281a"
+      - "--providers.file.filename=/traefik_conf.yaml"
+      - "--global.checkNewVersion=true"
+      - "--global.sendAnonymousUsage=false"
+    ports:
+      - "443:443"
+      - "80:80"
+    volumes:
+      - "./letsencrypt:/letsencrypt"
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "./traefik_conf.yaml:/traefik_conf.yaml"
+    healthcheck:
+      test: ["CMD", "wget", "http://localhost:8082/ping","--spider"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    labels:
+      - "traefik.enable=true"
+      # Traefik URL (replace with yours)
+      - "traefik.http.routers.dashboard.rule=Host(`domain`)"
+      - "traefik.http.routers.dashboard.service=api@internal"
+      - "traefik.http.routers.dashboard.entrypoints=websecure"
+      - "traefik.http.services.dashboard.loadbalancer.server.port=8080"
+      - "traefik.http.routers.dashboard.tls=true"
+      - "traefik.http.routers.dashboard.tls.certresolver=letsencrypt"
+      - "traefik.http.services.dashboard.loadbalancer.passhostheader=true"
+      - "traefik.http.routers.dashboard.middlewares=authtraefik"
+  postgredb:
+    image: postgres:13.2
+    environment:
+      - POSTGRES_PASSWORD=odoo
+      - POSTGRES_USER=odoo
+      - POSTGRES_DB=postgres
+    restart: always
+    volumes:
+        - ./postgresql:/var/lib/postgresql/data
+
+  odoo:
+    image: jpadron1986/odoo:15.20220412
+    user: root
+    #build: . 
+    depends_on:
+      - postgredb
+    ports:
+      - "8069:8069"
+      - "8072:8072" # live chat
+    tty: true
+    command: -- --dev=reload
+    volumes:
+      - ./odoo-web-data:/var/lib/odoo
+      - ./addons:/mnt/extra-addons
+      - ./etc/odoo:/etc/odoo
+    restart: always
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.client_stellar_art_gallery.rule=Host(`domain`) || Host(`www.domain`)"
+      - "traefik.http.routers.client_stellar_art_gallery.entrypoints=web"
+      - "traefik.http.routers.client_stellar_art_gallery.entrypoints=websecure"
+      - "traefik.http.routers.client_stellar_art_gallery.tls.certresolver=myresolver"
+      - "traefik.http.routers.client_stellar_art_gallery.middlewares=https_redirect"
+      - "traefik.http.middlewares.https_redirect.redirectscheme.scheme=https"
+      - "traefik.http.middlewares.https_redirect.redirectscheme.permanent=true"
+      # use compression
+      - "traefik.http.routers.client_stellar_art_gallery.middlewares=test-compress"
+      - "traefik.http.middlewares.test-compress.compress=true"
+      
